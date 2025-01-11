@@ -1,182 +1,205 @@
+// src/App.jsx
 import { useState, useEffect } from "react";
 import {
   Authenticator,
   Button,
-  Text,
-  TextField,
   Heading,
   Flex,
-  View,
-  Image,
-  Grid,
-  Divider,
+  Card,
+  Text,
 } from "@aws-amplify/ui-react";
 import { Amplify } from "aws-amplify";
 import "@aws-amplify/ui-react/styles.css";
-import { getUrl } from "aws-amplify/storage";
-import { uploadData } from "aws-amplify/storage";
 import { generateClient } from "aws-amplify/data";
 import outputs from "../amplify_outputs.json";
-/**
- * @type {import('aws-amplify/data').Client<import('../amplify/data/resource').Schema>}
- */
+
+import KingdomStats from "./components/game/KingdomStats";
+import EventSystem from "./components/game/EventSystem";
+import ResourceManager from "./components/game/ResourceManager";
 
 Amplify.configure(outputs);
-const client = generateClient({
-  authMode: "userPool",
-});
+const client = generateClient();
+
+const EVENTS = [
+  {
+    title: "Trade Proposal",
+    description: "A neighboring kingdom offers a trade agreement that could boost our economy but requires military resources for protection of trade routes.",
+    choices: [
+      {
+        text: "Accept the trade agreement",
+        impact: { economy: 15, military: -5, happiness: 5 }
+      },
+      {
+        text: "Reject and focus on military",
+        impact: { economy: -5, military: 10, happiness: -5 }
+      }
+    ]
+  },
+  {
+    title: "Population Crisis",
+    description: "A drought has caused food shortages in the outer regions of your kingdom.",
+    choices: [
+      {
+        text: "Distribute food reserves",
+        impact: { economy: -10, happiness: 15, population: 100 }
+      },
+      {
+        text: "Maintain reserves for the military",
+        impact: { military: 10, happiness: -15, population: -200 }
+      }
+    ]
+  },
+  {
+    title: "Military Decision",
+    description: "Your generals suggest increasing military training, but it will require more resources and may affect public mood.",
+    choices: [
+      {
+        text: "Approve the training program",
+        impact: { military: 20, economy: -10, happiness: -5 }
+      },
+      {
+        text: "Focus on civilian projects instead",
+        impact: { military: -5, economy: 10, happiness: 10 }
+      }
+    ]
+  }
+];
 
 export default function App() {
-  const [notes, setNotes] = useState([]);
+  const [kingdom, setKingdom] = useState(null);
+  const [currentEvent, setCurrentEvent] = useState(null);
+  const [resources, setResources] = useState([]);
+  const [turn, setTurn] = useState(1);
 
   useEffect(() => {
-    fetchNotes();
+    initializeGame();
   }, []);
 
-  async function fetchNotes() {
-    const { data: notes } = await client.models.Note.list();
-    await Promise.all(
-      notes.map(async (note) => {
-        if (note.image) {
-          const linkToStorageFile = await getUrl({
-            path: ({ identityId }) => `media/${identityId}/${note.image}`,
-          });
-          console.log(linkToStorageFile.url);
-          note.image = linkToStorageFile.url;
+  async function initializeGame() {
+    try {
+      // Reset turn counter when initializing game
+      setTurn(1);  // Add this line
+
+      // Cleanup any existing data
+      const { data: existingKingdoms } = await client.models.Kingdom.list();
+      for (const k of existingKingdoms) {
+        await client.models.Kingdom.delete({ id: k.id });
+      }
+
+      // Create new kingdom
+      const { data: newKingdom } = await client.models.Kingdom.create({
+        name: "Your Kingdom",
+        population: 1000,
+        economy: 50,
+        military: 30,
+        happiness: 70,
+        description: "A new kingdom rises!",
+      });
+      
+      setKingdom(newKingdom);
+      
+      // Initialize resources
+      const initialResources = [
+        { name: "Gold", quantity: 1000, type: "GOLD" },
+        { name: "Food", quantity: 500, type: "FOOD" },
+        { name: "Timber", quantity: 200, type: "TIMBER" },
+      ];
+      
+      for (const resource of initialResources) {
+        await client.models.Resource.create({
+          ...resource,
+          kingdomId: newKingdom.id,
+        });
+      }
+      
+      await loadKingdomResources(newKingdom.id);
+    } catch (error) {
+      console.error("Error initializing game:", error);
+    }
+  }
+
+  async function loadKingdomResources(kingdomId) {
+    const { data: kingdomResources } = await client.models.Resource.list({
+      filter: {
+        kingdomId: {
+          eq: kingdomId
         }
-        return note;
-      })
-    );
-    console.log(notes);
-    setNotes(notes);
-  }
-
-  async function createNote(event) {
-    event.preventDefault();
-    const form = new FormData(event.target);
-    console.log(form.get("image").name);
-
-    const { data: newNote } = await client.models.Note.create({
-      name: form.get("name"),
-      description: form.get("description"),
-      image: form.get("image").name,
+      }
     });
-
-    console.log(newNote);
-    if (newNote.image)
-      if (newNote.image)
-        await uploadData({
-          path: ({ identityId }) => `media/${identityId}/${newNote.image}`,
-
-          data: form.get("image"),
-        }).result;
-
-    fetchNotes();
-    event.target.reset();
+    setResources(kingdomResources);
   }
 
-  async function deleteNote({ id }) {
-    const toBeDeletedNote = {
-      id: id,
-    };
+  async function handleEventChoice(choice) {
+    try {
+      const impact = JSON.parse(choice.impact);
+      
+      const { data: updatedKingdom } = await client.models.Kingdom.update({
+        id: kingdom.id,
+        population: kingdom.population + (impact.population || 0),
+        economy: Math.max(0, kingdom.economy + (impact.economy || 0)),
+        military: Math.max(0, kingdom.military + (impact.military || 0)),
+        happiness: Math.max(0, Math.min(100, kingdom.happiness + (impact.happiness || 0))),
+      });
+      
+      setKingdom(updatedKingdom);
+      setCurrentEvent(null);
+      setTurn(turn + 1);
 
-    const { data: deletedNote } = await client.models.Note.delete(
-      toBeDeletedNote
-    );
-    console.log(deletedNote);
+      // Check game over conditions
+      if (updatedKingdom.happiness <= 0 || updatedKingdom.economy <= 0) {
+        alert("Game Over! Your kingdom has fallen into chaos.");
+        await initializeGame();
+        return;
+      }
+    } catch (error) {
+      console.error("Error handling event choice:", error);
+    }
+  }
 
-    fetchNotes();
+  function generateNewEvent() {
+    const randomEvent = EVENTS[Math.floor(Math.random() * EVENTS.length)];
+    setCurrentEvent({
+      ...randomEvent,
+      choices: JSON.stringify(randomEvent.choices.map(choice => ({
+        ...choice,
+        impact: JSON.stringify(choice.impact)
+      })))
+    });
   }
 
   return (
     <Authenticator>
       {({ signOut }) => (
-        <Flex
-          className="App"
-          justifyContent="center"
-          alignItems="center"
-          direction="column"
-          width="70%"
-          margin="0 auto"
-        >
-          <Heading level={1}>My Notes App</Heading>
-          <View as="form" margin="3rem 0" onSubmit={createNote}>
-            <Flex
-              direction="column"
-              justifyContent="center"
-              gap="2rem"
-              padding="2rem"
-            >
-              <TextField
-                name="name"
-                placeholder="Note Name"
-                label="Note Name"
-                labelHidden
-                variation="quiet"
-                required
-              />
-              <TextField
-                name="description"
-                placeholder="Note Description"
-                label="Note Description"
-                labelHidden
-                variation="quiet"
-                required
-              />
-              <View
-                name="image"
-                as="input"
-                type="file"
-                alignSelf={"end"}
-                accept="image/png, image/jpeg"
-              />
+        <Flex direction="column" gap="2rem" padding="2rem">
+          <Flex justifyContent="space-between" alignItems="center">
+            <Heading level={1}>Kingdom's Reign</Heading>
+            <Text fontSize="1.2em">Turn: {turn}</Text>
+          </Flex>
 
-              <Button type="submit" variation="primary">
-                Create Note
-              </Button>
+          {kingdom && (
+            <Flex direction="column" gap="2rem">
+              <KingdomStats kingdom={kingdom} />
+              <ResourceManager resources={resources} />
+              
+              {currentEvent ? (
+                <EventSystem 
+                  event={currentEvent}
+                  onChoiceSelect={handleEventChoice}
+                />
+              ) : (
+                <Card padding="2rem" textAlign="center">
+                  <Button 
+                    onClick={generateNewEvent}
+                    size="large"
+                    variation="primary"
+                  >
+                    Next Turn
+                  </Button>
+                </Card>
+              )}
             </Flex>
-          </View>
-          <Divider />
-          <Heading level={2}>Current Notes</Heading>
-          <Grid
-            margin="3rem 0"
-            autoFlow="column"
-            justifyContent="center"
-            gap="2rem"
-            alignContent="center"
-          >
-            {notes.map((note) => (
-              <Flex
-                key={note.id || note.name}
-                direction="column"
-                justifyContent="center"
-                alignItems="center"
-                gap="2rem"
-                border="1px solid #ccc"
-                padding="2rem"
-                borderRadius="5%"
-                className="box"
-              >
-                <View>
-                  <Heading level="3">{note.name}</Heading>
-                </View>
-                <Text fontStyle="italic">{note.description}</Text>
-                {note.image && (
-                  <Image
-                    src={note.image}
-                    alt={`visual aid for ${notes.name}`}
-                    style={{ width: 400 }}
-                  />
-                )}
-                <Button
-                  variation="destructive"
-                  onClick={() => deleteNote(note)}
-                >
-                  Delete note
-                </Button>
-              </Flex>
-            ))}
-          </Grid>
+          )}
+          
           <Button onClick={signOut}>Sign Out</Button>
         </Flex>
       )}

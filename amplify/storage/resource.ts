@@ -1,9 +1,12 @@
 import { defineStorage } from "@aws-amplify/backend";
 
 export const storage = defineStorage({
-  name: "amplifyNotesDrive",
+  name: "kingdomGameAssets",
   access: (allow) => ({
-    "media/{entity_id}/*": [
+    "assets/{entity_id}/*": [
+      allow.entity("identity").to(["read"]),
+    ],
+    "saves/{entity_id}/*": [
       allow.entity("identity").to(["read", "write", "delete"]),
     ],
   }),
