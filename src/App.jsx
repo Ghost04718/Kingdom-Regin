@@ -16,60 +16,17 @@ import outputs from "../amplify_outputs.json";
 import KingdomStats from "./components/game/KingdomStats";
 import EventSystem from "./components/game/EventSystem";
 import ResourceManager from "./components/game/ResourceManager";
+import EventGenerator from "./services/events/eventGenerator";
 
 Amplify.configure(outputs);
 const client = generateClient();
-
-const EVENTS = [
-  {
-    title: "Trade Proposal",
-    description: "A neighboring kingdom offers a trade agreement that could boost our economy but requires military resources for protection of trade routes.",
-    choices: [
-      {
-        text: "Accept the trade agreement",
-        impact: { economy: 15, military: -5, happiness: 5 }
-      },
-      {
-        text: "Reject and focus on military",
-        impact: { economy: -5, military: 10, happiness: -5 }
-      }
-    ]
-  },
-  {
-    title: "Population Crisis",
-    description: "A drought has caused food shortages in the outer regions of your kingdom.",
-    choices: [
-      {
-        text: "Distribute food reserves",
-        impact: { economy: -10, happiness: 15, population: 100 }
-      },
-      {
-        text: "Maintain reserves for the military",
-        impact: { military: 10, happiness: -15, population: -200 }
-      }
-    ]
-  },
-  {
-    title: "Military Decision",
-    description: "Your generals suggest increasing military training, but it will require more resources and may affect public mood.",
-    choices: [
-      {
-        text: "Approve the training program",
-        impact: { military: 20, economy: -10, happiness: -5 }
-      },
-      {
-        text: "Focus on civilian projects instead",
-        impact: { military: -5, economy: 10, happiness: 10 }
-      }
-    ]
-  }
-];
 
 export default function App() {
   const [kingdom, setKingdom] = useState(null);
   const [currentEvent, setCurrentEvent] = useState(null);
   const [resources, setResources] = useState([]);
   const [turn, setTurn] = useState(1);
+  const [eventGenerator, setEventGenerator] = useState(null);
 
   useEffect(() => {
     initializeGame();
@@ -77,10 +34,9 @@ export default function App() {
 
   async function initializeGame() {
     try {
-      // Reset turn counter when initializing game
-      setTurn(1);  // Add this line
+      setTurn(1);
 
-      // Cleanup any existing data
+      // Cleanup existing data
       const { data: existingKingdoms } = await client.models.Kingdom.list();
       for (const k of existingKingdoms) {
         await client.models.Kingdom.delete({ id: k.id });
@@ -97,6 +53,9 @@ export default function App() {
       });
       
       setKingdom(newKingdom);
+      
+      // Initialize event generator
+      setEventGenerator(new EventGenerator(newKingdom.id));
       
       // Initialize resources
       const initialResources = [
@@ -129,42 +88,160 @@ export default function App() {
     setResources(kingdomResources);
   }
 
+  // Check game state and trigger appropriate events/consequences
+  function checkGameState(kingdom) {
+    const failureMessages = [];
+    let isGameOver = false;
+
+    // Check each stat for failure conditions
+    if (kingdom.happiness <= 0) {
+      failureMessages.push("Your people have completely lost faith in your leadership. A rebellion has overthrown your rule!");
+      isGameOver = true;
+    }
+
+    if (kingdom.economy <= 0) {
+      failureMessages.push("The kingdom's treasury is empty. Economic collapse has led to widespread chaos!");
+      isGameOver = true;
+    }
+
+    if (kingdom.military <= 0) {
+      failureMessages.push("With no military force remaining, your kingdom has been conquered by neighboring powers!");
+      isGameOver = true;
+    }
+
+    if (kingdom.population <= 0) {
+      failureMessages.push("Your kingdom has been completely depopulated. The once-great realm is now a ghost kingdom!");
+      isGameOver = true;
+    }
+
+    // Critical warnings (not game over but dangerous)
+    const warnings = [];
+    if (kingdom.happiness <= 20 && kingdom.happiness > 0) {
+      warnings.push("WARNING: Civil unrest is reaching dangerous levels!");
+    }
+    if (kingdom.economy <= 20 && kingdom.economy > 0) {
+      warnings.push("WARNING: The kingdom's economy is on the brink of collapse!");
+    }
+    if (kingdom.military <= 20 && kingdom.military > 0) {
+      warnings.push("WARNING: Your military forces are critically weakened!");
+    }
+    if (kingdom.population <= 200 && kingdom.population > 0) {
+      warnings.push("WARNING: The kingdom's population has reached dangerously low levels!");
+    }
+
+    return {
+      isGameOver,
+      failureMessages,
+      warnings
+    };
+  }
+
   async function handleEventChoice(choice) {
     try {
       const impact = JSON.parse(choice.impact);
       
+      // Calculate new values with validation
+      const newPopulation = Math.max(0, kingdom.population + (impact.population || 0));
+      const newEconomy = Math.max(0, kingdom.economy + (impact.economy || 0));
+      const newMilitary = Math.max(0, kingdom.military + (impact.military || 0));
+      const newHappiness = Math.max(0, Math.min(100, kingdom.happiness + (impact.happiness || 0)));
+
       const { data: updatedKingdom } = await client.models.Kingdom.update({
         id: kingdom.id,
-        population: kingdom.population + (impact.population || 0),
-        economy: Math.max(0, kingdom.economy + (impact.economy || 0)),
-        military: Math.max(0, kingdom.military + (impact.military || 0)),
-        happiness: Math.max(0, Math.min(100, kingdom.happiness + (impact.happiness || 0))),
+        population: newPopulation,
+        economy: newEconomy,
+        military: newMilitary,
+        happiness: newHappiness,
       });
       
       setKingdom(updatedKingdom);
       setCurrentEvent(null);
       setTurn(turn + 1);
 
-      // Check game over conditions
-      if (updatedKingdom.happiness <= 0 || updatedKingdom.economy <= 0) {
-        alert("Game Over! Your kingdom has fallen into chaos.");
+      // Check game state after update
+      const gameState = checkGameState(updatedKingdom);
+
+      // Display warnings first if any
+      if (gameState.warnings.length > 0) {
+        gameState.warnings.forEach(warning => {
+          alert(warning);
+        });
+      }
+
+      // Check for game over conditions
+      if (gameState.isGameOver) {
+        const finalMessage = gameState.failureMessages.join("\n\n");
+        alert(`GAME OVER!\n\n${finalMessage}\n\nYour reign lasted ${turn} turns.`);
         await initializeGame();
         return;
       }
+
     } catch (error) {
       console.error("Error handling event choice:", error);
+      alert("An error occurred while processing your choice. Please try again.");
     }
   }
 
-  function generateNewEvent() {
-    const randomEvent = EVENTS[Math.floor(Math.random() * EVENTS.length)];
-    setCurrentEvent({
-      ...randomEvent,
-      choices: JSON.stringify(randomEvent.choices.map(choice => ({
-        ...choice,
-        impact: JSON.stringify(choice.impact)
-      })))
-    });
+  async function generateNewEvent() {
+    try {
+      if (!eventGenerator || !kingdom) {
+        console.warn("Cannot generate event: eventGenerator or kingdom not initialized");
+        return;
+      }
+
+      const kingdomState = {
+        happiness: kingdom.happiness,
+        economy: kingdom.economy,
+        military: kingdom.military,
+        population: kingdom.population
+      };
+
+      const newEvent = await eventGenerator.generateEvent(kingdomState);
+      if (!newEvent) {
+        console.error("Failed to generate event");
+        // Generate a fallback event
+        setCurrentEvent({
+          title: "Kingdom Affairs",
+          description: "A quiet day in the kingdom allows for reflection and planning.",
+          type: "INTERNAL",
+          impact: JSON.stringify({ happiness: 5 }),
+          choices: JSON.stringify([
+            {
+              text: "Focus on internal affairs",
+              impact: JSON.stringify({ economy: 5, happiness: 5 })
+            },
+            {
+              text: "Strengthen defenses",
+              impact: JSON.stringify({ military: 5, economy: -5 })
+            }
+          ]),
+          timestamp: new Date().toISOString()
+        });
+        return;
+      }
+
+      setCurrentEvent(newEvent);
+    } catch (error) {
+      console.error("Error generating event:", error);
+      // Set a fallback event in case of error
+      setCurrentEvent({
+        title: "Peaceful Times",
+        description: "The kingdom enjoys a moment of peace and stability.",
+        type: "RANDOM",
+        impact: JSON.stringify({ happiness: 5 }),
+        choices: JSON.stringify([
+          {
+            text: "Maintain the peace",
+            impact: JSON.stringify({ happiness: 5 })
+          },
+          {
+            text: "Prepare for the future",
+            impact: JSON.stringify({ military: 5, economy: 5, happiness: -5 })
+          }
+        ]),
+        timestamp: new Date().toISOString()
+      });
+    }
   }
 
   return (
