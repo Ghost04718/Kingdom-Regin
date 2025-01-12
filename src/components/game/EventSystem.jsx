@@ -4,7 +4,14 @@ import { Card, Flex, Text, Button, View } from "@aws-amplify/ui-react";
 const EventSystem = ({ event, onChoiceSelect }) => {
   if (!event) return null;
 
-  const choices = JSON.parse(event.choices);
+  // Parse choices safely
+  let choices;
+  try {
+    choices = typeof event.choices === 'string' ? JSON.parse(event.choices) : event.choices;
+  } catch (error) {
+    console.error('Error parsing choices:', error);
+    choices = [];
+  }
 
   return (
     <Card variation="elevated" padding="2rem">
@@ -16,11 +23,25 @@ const EventSystem = ({ event, onChoiceSelect }) => {
 
         <Flex direction="column" gap="1rem">
           {choices.map((choice, index) => {
-            const impact = JSON.parse(choice.impact);
+            let impact;
+            try {
+              impact = typeof choice.impact === 'string' 
+                ? JSON.parse(choice.impact) 
+                : choice.impact;
+            } catch (error) {
+              console.error('Error parsing impact:', error);
+              impact = {};
+            }
+
             return (
               <Button
                 key={index}
-                onClick={() => onChoiceSelect(choice)}
+                onClick={() => onChoiceSelect({
+                  ...choice,
+                  impact: typeof choice.impact === 'string' 
+                    ? choice.impact 
+                    : JSON.stringify(choice.impact)
+                })}
                 variation="primary"
                 size="large"
               >
