@@ -6,44 +6,72 @@ const client = generateClient();
 const EVENT_TYPES = {
   INTERNAL: 'INTERNAL',
   EXTERNAL: 'EXTERNAL',
-  RANDOM: 'RANDOM',
-  RESOURCE_CRISIS: 'RESOURCE_CRISIS'
+  RANDOM: 'RANDOM'
 };
 
-// Event Templates
-const EVENT_TEMPLATES = {
-  // Internal Events
-  REBELLION: {
-    title: 'Civil Unrest',
-    description: 'Citizens are demanding better living conditions.',
-    type: EVENT_TYPES.INTERNAL,
-    impact: { happiness: -10, population: -50 }
-  },
-  ECONOMY: {
-    title: 'Economic Challenge',
-    description: 'Market fluctuations are affecting the kingdom.',
-    type: EVENT_TYPES.INTERNAL,
-    impact: { economy: -15, happiness: -5 }
-  },
-  FESTIVAL: {
-    title: 'Festival Season',
-    description: 'The people request a grand festival to boost morale.',
-    type: EVENT_TYPES.INTERNAL,
-    impact: { happiness: 15, economy: -10 }
-  },
-  TRADE: {
+// Basic event templates
+const EVENT_TEMPLATES = [
+  {
     title: 'Trade Opportunity',
-    description: 'Merchants propose new trade routes.',
+    description: 'Merchants propose new trade routes to boost the economy.',
     type: EVENT_TYPES.EXTERNAL,
-    impact: { economy: 15, happiness: 5 }
+    choices: [
+      {
+        text: 'Accept the trade proposal',
+        impact: { economy: 10, happiness: 5, military: -5 }
+      },
+      {
+        text: 'Decline the offer',
+        impact: { economy: -5, happiness: -5 }
+      }
+    ]
   },
-  WAR: {
-    title: 'Military Threat',
-    description: 'A neighboring kingdom threatens our borders.',
-    type: EVENT_TYPES.EXTERNAL,
-    impact: { military: -20, population: -100 }
+  {
+    title: 'Military Training',
+    description: 'Your generals request resources for military exercises.',
+    type: EVENT_TYPES.INTERNAL,
+    choices: [
+      {
+        text: 'Fund the training program',
+        impact: { military: 15, economy: -10, happiness: -5 }
+      },
+      {
+        text: 'Focus on civilian needs instead',
+        impact: { military: -5, happiness: 10, economy: 5 }
+      }
+    ]
+  },
+  {
+    title: 'Population Growth',
+    description: 'New families are looking to settle in your kingdom.',
+    type: EVENT_TYPES.INTERNAL,
+    choices: [
+      {
+        text: 'Welcome the newcomers',
+        impact: { population: 100, happiness: 5, economy: -5 }
+      },
+      {
+        text: 'Restrict immigration',
+        impact: { population: -50, happiness: -5, economy: 5 }
+      }
+    ]
+  },
+  {
+    title: 'Natural Disaster',
+    description: 'A severe storm has damaged parts of the kingdom.',
+    type: EVENT_TYPES.RANDOM,
+    choices: [
+      {
+        text: 'Focus on immediate repairs',
+        impact: { economy: -15, happiness: 10, population: -50 }
+      },
+      {
+        text: 'Save resources for later',
+        impact: { economy: -5, happiness: -10, population: -100 }
+      }
+    ]
   }
-};
+];
 
 class EventGenerator {
   constructor(kingdomId) {
@@ -52,28 +80,21 @@ class EventGenerator {
 
   async generateEvent(kingdomState) {
     try {
-      // Select a random event template
-      const templates = Object.values(EVENT_TEMPLATES);
-      const template = templates[Math.floor(Math.random() * templates.length)];
+      // Select random event template
+      const template = EVENT_TEMPLATES[Math.floor(Math.random() * EVENT_TEMPLATES.length)];
+      
+      // Adjust event based on kingdom state
+      const adjustedEvent = this._adjustEventForKingdom(template, kingdomState);
 
-      // Generate choices based on the event
-      const choices = this._generateChoices(template, kingdomState);
-
-      // Create the event
-      const eventChoices = this._generateChoices(template, kingdomState);
+      // Create the event in the database
       const event = {
-        id: `event_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        title: template.title,
-        description: template.description,
-        type: template.type,
-        impact: JSON.stringify(template.impact),
-        choices: JSON.stringify(eventChoices.map(choice => ({
-          ...choice,
-          impact: JSON.stringify(choice.impact)
-        }))),
+        title: adjustedEvent.title,
+        description: adjustedEvent.description,
+        type: adjustedEvent.type,
+        impact: JSON.stringify({}), // Base impact is empty, choices contain the impacts
+        choices: JSON.stringify(adjustedEvent.choices),
         timestamp: new Date().toISOString(),
         kingdomId: this.kingdomId,
-        resourceEffects: '{}',
         owner: kingdomState.owner
       };
 
@@ -86,50 +107,31 @@ class EventGenerator {
     }
   }
 
-  _generateChoices(template, kingdomState) {
-    // Generate standard choices based on event type
-    const baseChoices = [
-      {
-        text: "Accept and adapt",
-        impact: {
-          ...template.impact,
-          happiness: Math.floor(template.impact.happiness * 0.8 || 0)
-        }
-      },
-      {
-        text: "Take aggressive action",
-        impact: {
-          happiness: -10,
-          military: 5,
-          economy: -5
-        }
+  _adjustEventForKingdom(template, kingdomState) {
+    // Make a deep copy of the template
+    const event = JSON.parse(JSON.stringify(template));
+
+    // Adjust impacts based on kingdom state
+    event.choices = event.choices.map(choice => {
+      const impact = { ...choice.impact };
+
+      // Adjust population changes based on current population
+      if (impact.population) {
+        impact.population = Math.floor(impact.population * (kingdomState.population / 1000));
       }
-    ];
 
-    // Add conditional choices based on kingdom state
-    if (kingdomState.economy > 30) {
-      baseChoices.push({
-        text: "Use treasury to resolve situation",
-        impact: {
-          economy: -20,
-          happiness: 10,
-          military: 5
-        }
-      });
-    }
+      // Adjust economic impact based on current economy
+      if (impact.economy) {
+        impact.economy = Math.floor(impact.economy * (kingdomState.economy / 50));
+      }
 
-    if (kingdomState.military > 40) {
-      baseChoices.push({
-        text: "Show military strength",
-        impact: {
-          military: -10,
-          happiness: 5,
-          economy: 5
-        }
-      });
-    }
+      return {
+        ...choice,
+        impact
+      };
+    });
 
-    return baseChoices;
+    return event;
   }
 }
 
