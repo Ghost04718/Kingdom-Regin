@@ -47,155 +47,172 @@ function GameContent({ signOut }) {
     }
   }, [user, hasInitialized]);
 
-  async function cleanupKingdom() {
-    try {
-      // Clean up existing kingdoms
+  // Update this function in App.jsx
+async function cleanupKingdom() {
+  try {
+    // Clean up existing kingdoms
+    const { data: existingKingdoms } = await client.models.Kingdom.list({
+      filter: {
+        owner: { eq: user.username || user.userId }
+      }
+    });
+    
+    if (existingKingdoms && existingKingdoms.length > 0) {
+      for (const kingdom of existingKingdoms) {
+        if (!kingdom || !kingdom.id) continue; // Skip if kingdom or id is null
+
+        try {
+          // Clean up associated resources
+          const { data: resources } = await client.models.Resource.list({
+            filter: {
+              kingdomId: { eq: kingdom.id }
+            }
+          });
+          
+          if (resources) {
+            for (const resource of resources) {
+              if (resource && resource.id) {
+                await client.models.Resource.delete({ id: resource.id });
+              }
+            }
+          }
+
+          // Clean up associated events
+          const { data: events } = await client.models.Event.list({
+            filter: {
+              kingdomId: { eq: kingdom.id }
+            }
+          });
+          
+          if (events) {
+            for (const event of events) {
+              if (event && event.id) {
+                await client.models.Event.delete({ id: event.id });
+              }
+            }
+          }
+
+          // Delete the kingdom
+          await client.models.Kingdom.delete({ id: kingdom.id });
+        } catch (e) {
+          console.warn(`Error cleaning up kingdom ${kingdom.id}:`, e);
+          // Continue with next kingdom even if there's an error
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("Error during cleanup:", e);
+    // Don't throw error, just log warning
+  }
+}
+
+// Update this function in App.jsx
+async function initializeGame(loadExisting = true) {
+  setLoading(true);
+  setError(null);
+  setNotifications([]);
+  setCurrentEvent(null);
+
+  try {
+    // Check for existing kingdom first
+    if (loadExisting) {
+      console.log("Attempting to load existing kingdom...");
       const { data: existingKingdoms } = await client.models.Kingdom.list({
         filter: {
           owner: { eq: user.username || user.userId }
         }
       });
-      
+
       if (existingKingdoms && existingKingdoms.length > 0) {
-        for (const k of existingKingdoms) {
+        // Filter out null kingdoms and get the first valid one
+        const validKingdom = existingKingdoms.find(k => k && k.id);
+        
+        if (validKingdom) {
+          console.log("Found existing kingdom:", validKingdom);
+          setKingdom(validKingdom);
+          
           try {
-            // Clean up associated resources
-            const { data: resources } = await client.models.Resource.list({
-              filter: {
-                kingdomId: { eq: k.id }
-              }
-            });
-            for (const r of resources) {
-              await client.models.Resource.delete({ id: r.id });
-            }
-
-            // Clean up associated events
-            const { data: events } = await client.models.Event.list({
-              filter: {
-                kingdomId: { eq: k.id }
-              }
-            });
-            for (const e of events) {
-              await client.models.Event.delete({ id: e.id });
-            }
-
-            // Delete the kingdom
-            await client.models.Kingdom.delete({ id: k.id });
-          } catch (e) {
-            console.warn(`Error cleaning up kingdom ${k.id}:`, e);
+            // Initialize managers with existing kingdom
+            const newEventGenerator = new EventGenerator(validKingdom.id);
+            const newResourceManager = new ResourceManagerService(validKingdom.id);
+            
+            setEventGenerator(newEventGenerator);
+            setResourceManager(newResourceManager);
+          } catch (error) {
+            console.warn('Error initializing managers:', error);
+            // Continue even if managers fail to initialize
           }
-        }
-      }
-    } catch (e) {
-      console.warn("Error during cleanup:", e);
-    }
-  }
 
-  async function initializeGame(loadExisting = true) {
-    setLoading(true);
-    setError(null);
-    setNotifications([]);
-    setCurrentEvent(null);
-  
-    try {
-      // Check for existing kingdom first
-      if (loadExisting) {
-        console.log("Attempting to load existing kingdom...");
-        const { data: existingKingdoms } = await client.models.Kingdom.list({
-          filter: {
-            owner: { eq: user.username || user.userId }
-          }
-        });
-  
-        console.log("Query result:", existingKingdoms);
-  
-        if (existingKingdoms && existingKingdoms.length > 0 && existingKingdoms[0]) {
-          const existingKingdom = existingKingdoms[0];
-          console.log("Found existing kingdom:", existingKingdom);
-  
-          // Verify kingdom has all required fields
-          if (!existingKingdom.id) {
-            throw new Error("Invalid kingdom data: missing ID");
-          }
-  
-          setKingdom(existingKingdom);
-          
-          // Initialize managers with existing kingdom
-          const newEventGenerator = new EventGenerator(existingKingdom.id);
-          const newResourceManager = new ResourceManagerService(existingKingdom.id);
-          
-          setEventGenerator(newEventGenerator);
-          setResourceManager(newResourceManager);
-  
           // Load existing resources
-          await loadKingdomResources(existingKingdom.id);
+          await loadKingdomResources(validKingdom.id);
           
           // Set turn based on kingdom state
-          setTurn(existingKingdom.turn || 1);
+          setTurn(validKingdom.turn || 1);
           
           setLoading(false);
           return;
-        } else {
-          console.log("No existing kingdom found, creating new game...");
-          // If no valid kingdom found, proceed to create new game
-          return await initializeGame(false);
         }
       }
-  
-      // Create new game
-      console.log("Creating new game...");
-      await cleanupKingdom();
-  
-      const userId = user.username || user.userId;
-  
-      // Create new kingdom with turn counter
-      const kingdomData = {
-        name: "Your Kingdom",
-        population: 1000,
-        economy: 50,
-        military: 30,
-        happiness: 70,
-        description: "A new kingdom rises!",
-        turn: 1,
-        owner: userId
-      };
-  
-      console.log("Creating new kingdom with data:", kingdomData);
-  
-      const response = await client.models.Kingdom.create(kingdomData);
-      console.log("Kingdom creation response:", response);
-  
-      if (!response?.data) {
-        throw new Error("Failed to create kingdom - no response data");
-      }
-  
-      const newKingdom = response.data;
-      console.log("New kingdom created:", newKingdom);
-      setKingdom(newKingdom);
-      setTurn(1);
-  
+
+      console.log("No valid existing kingdom found, creating new game...");
+    }
+
+    // Create new game
+    console.log("Creating new game...");
+    await cleanupKingdom();
+
+    const userId = user.username || user.userId;
+
+    // Create new kingdom with turn counter
+    const kingdomData = {
+      name: "Your Kingdom",
+      population: 1000,
+      economy: 50,
+      military: 30,
+      happiness: 70,
+      description: "A new kingdom rises!",
+      turn: 1,
+      owner: userId
+    };
+
+    const response = await client.models.Kingdom.create(kingdomData);
+
+    if (!response?.data) {
+      throw new Error("Failed to create kingdom - no response data");
+    }
+
+    const newKingdom = response.data;
+    console.log("New kingdom created:", newKingdom);
+    setKingdom(newKingdom);
+    setTurn(1);
+
+    try {
       const newEventGenerator = new EventGenerator(newKingdom.id);
       const newResourceManager = new ResourceManagerService(newKingdom.id);
       
       setEventGenerator(newEventGenerator);
       setResourceManager(newResourceManager);
-  
+
       await newResourceManager.initializeResources();
       await loadKingdomResources(newKingdom.id);
-  
     } catch (error) {
-      console.error("Game initialization error details:", error);
-      setError(error.message || "Failed to initialize game");
-      // Reset state on error
-      setKingdom(null);
-      setEventGenerator(null);
-      setResourceManager(null);
-      setResources([]);
-      setTurn(1);
-    } finally {
-      setLoading(false);
+      console.warn('Error initializing managers:', error);
+      // Continue even if managers fail to initialize
     }
+
+  } catch (error) {
+    console.error("Game initialization error details:", error);
+    setError(error.message || "Failed to initialize game");
+    // Reset state on error
+    setKingdom(null);
+    setEventGenerator(null);
+    setResourceManager(null);
+    setResources([]);
+    setTurn(1);
+  } finally {
+    setLoading(false);
   }
+}
   
   // Update loadKingdomResources to handle null kingdomId
   async function loadKingdomResources(kingdomId) {

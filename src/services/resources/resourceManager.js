@@ -36,10 +36,25 @@ class ResourceManager {
     console.log("Initializing resources for kingdom:", this.kingdomId);
 
     try {
-      // Check for existing resources first
-      const { data: existingResources } = await client.models.Resource.list({
-        filter: { kingdomId: { eq: this.kingdomId } }
-      });
+      // Check for existing resources first with retry logic
+      let existingResources;
+      let retryCount = 0;
+      const maxRetries = 3;
+
+      while (retryCount < maxRetries) {
+        try {
+          const { data: resources } = await client.models.Resource.list({
+            filter: { kingdomId: { eq: this.kingdomId } }
+          });
+          existingResources = resources;
+          break;
+        } catch (error) {
+          console.warn(`Failed to fetch resources, attempt ${retryCount + 1}:`, error);
+          retryCount++;
+          if (retryCount === maxRetries) throw error;
+          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+        }
+      }
 
       if (existingResources && existingResources.length > 0) {
         console.log("Resources already exist for this kingdom");
@@ -49,23 +64,34 @@ class ResourceManager {
       const initialResources = Object.entries(RESOURCE_CONFIG).map(([type, config]) => ({
         name: type.charAt(0) + type.slice(1).toLowerCase().replace('_', ' '),
         type,
-        quantity: Math.floor(config.maxStorage * 0.2), // Start with 20% of max storage
+        quantity: Math.floor(config.maxStorage * 0.2),
         production: config.baseProduction,
         consumption: config.baseConsumption,
         minQuantity: config.minQuantity,
         maxStorage: config.maxStorage,
         kingdomId: this.kingdomId,
-        owner: this.kingdomId.split('_')[0] // Extract owner from kingdomId
+        owner: this.kingdomId.split('_')[0]
       }));
 
       console.log("Creating initial resources:", initialResources);
 
-      const createdResources = await Promise.all(
-        initialResources.map(async resource => {
-          const response = await client.models.Resource.create(resource);
-          return response.data;
-        })
-      );
+      // Create resources with retry logic
+      const createdResources = [];
+      for (const resource of initialResources) {
+        retryCount = 0;
+        while (retryCount < maxRetries) {
+          try {
+            const response = await client.models.Resource.create(resource);
+            createdResources.push(response.data);
+            break;
+          } catch (error) {
+            console.warn(`Failed to create resource, attempt ${retryCount + 1}:`, error);
+            retryCount++;
+            if (retryCount === maxRetries) throw error;
+            await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+          }
+        }
+      }
 
       console.log("Resources created successfully:", createdResources);
       return createdResources;
