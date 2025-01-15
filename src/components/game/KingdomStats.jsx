@@ -1,7 +1,18 @@
 // src/components/game/KingdomStats.jsx
-import { Card, Flex, Text, View, Grid } from "@aws-amplify/ui-react";
+import { Card, Flex, Text, View, Grid, Badge } from "@aws-amplify/ui-react";
 
 const KingdomStats = ({ kingdom }) => {
+  const getStatTrend = (stat, value) => {
+    const previousValue = kingdom[`previous${stat.charAt(0).toUpperCase() + stat.slice(1)}`];
+    if (!previousValue) return null;
+    
+    const change = value - previousValue;
+    return {
+      direction: change > 0 ? 'up' : change < 0 ? 'down' : 'stable',
+      percentage: Math.abs((change / previousValue) * 100).toFixed(1)
+    };
+  };
+  
   // Function to determine stat status
   const getStatStatus = (stat, value) => {
     if (stat === 'population') {
@@ -46,28 +57,44 @@ const KingdomStats = ({ kingdom }) => {
   };
 
   const StatDisplay = ({ label, value, stat }) => {
+    const trend = getStatTrend(stat, value);
     const status = getStatStatus(stat, value);
+    
     return (
       <Flex 
         direction="column" 
-        padding="1rem" 
+        padding="1rem"
         backgroundColor={getBackgroundColor(status)}
         borderRadius="medium"
-        style={{
-          transition: 'background-color 0.3s ease'
-        }}
+        transition="all 0.3s ease"
+        className="hover:shadow-lg"
       >
-        <Text fontWeight="bold">{label}</Text>
+        <Flex justifyContent="space-between" alignItems="center">
+          <Text fontWeight="bold">{label}</Text>
+          {trend && (
+            <Badge
+              backgroundColor={trend.direction === 'up' ? 'green.100' : 'red.100'}
+              color={trend.direction === 'up' ? 'green.900' : 'red.900'}
+            >
+              {trend.direction === 'up' ? '↑' : '↓'} {trend.percentage}%
+            </Badge>
+          )}
+        </Flex>
         <Text 
-          fontSize="1.2em" 
+          fontSize="1.5em" 
           color={getTextColor(status)}
-          style={{
-            transition: 'color 0.3s ease'
-          }}
+          marginTop="0.5rem"
         >
           {typeof value === 'number' ? value.toLocaleString() : value}
-          {stat !== 'population' && stat !== 'happiness' ? '' : stat === 'happiness' ? '%' : ''}
+          {stat === 'happiness' && '%'}
         </Text>
+        
+        {/* Status indicator */}
+        <View marginTop="0.5rem">
+          <Badge variation={status.toLowerCase()}>
+            {status}
+          </Badge>
+        </View>
       </Flex>
     );
   };

@@ -9,519 +9,529 @@ import {
   Text,
   Alert,
   View,
-  useAuthenticator,
-  useTheme
+  useAuthenticator
 } from "@aws-amplify/ui-react";
 import { Amplify } from "aws-amplify";
 import "@aws-amplify/ui-react/styles.css";
 import { generateClient } from "aws-amplify/data";
 import config from "../amplify_outputs.json";
 
+// Import base components
 import KingdomStats from "./components/game/KingdomStats";
 import EventSystem from "./components/game/EventSystem";
 import ResourceManager from "./components/game/ResourceManager";
 import NotificationCenter from "./components/game/NotificationCenter";
-import TutorialOverlay from './components/tutorial/TutorialOverlay';
-import HelpButton from './components/tutorial/HelpButton';
+import TurnSummary from "./components/game/TurnSummary";
+import SettingsPanel from "./components/game/SettingsPanel";
+import { ResourceProvider } from './contexts/ResourceContext';
+
+// Import services
 import EventGenerator from "./services/events/eventGenerator";
-import ResourceManagerService from "./services/resources/resourceManager";
-import GameStateManager from './services/game/gameStateManager';
-import { calculateEventResourceImpact } from './constants/resourceConstants';
+import TurnManager from "./services/game/turnManager";
+import SettingsManager from "./services/game/settingsManager";
+import { GAME_CONFIG } from './constants/gameConstants';
+import ErrorBoundary from './components/ErrorBoundary';
 
 Amplify.configure(config);
 const client = generateClient();
 
 function GameContent({ signOut }) {
-  // State Management
+  // State
   const [kingdom, setKingdom] = useState(null);
   const [currentEvent, setCurrentEvent] = useState(null);
-  const [resources, setResources] = useState([]);
   const [turn, setTurn] = useState(1);
-  const [eventGenerator, setEventGenerator] = useState(null);
-  const [resourceManager, setResourceManager] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
   const [notifications, setNotifications] = useState([]);
-  const [showTutorial, setShowTutorial] = useState(false);
-  const [hasSeenTutorial, setHasSeenTutorial] = useState(false);
-  const [showNewGameConfirm, setShowNewGameConfirm] = useState(false);
+  const [turnSummary, setTurnSummary] = useState(null);
+  const [eventGenerator, setEventGenerator] = useState(null);
+  const [turnManager, setTurnManager] = useState(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [settings, setSettings] = useState(null);
+  const [settingsManager, setSettingsManager] = useState(null);
+  
   const { user } = useAuthenticator();
-  const [hasInitialized, setHasInitialized] = useState(false);
-  const { tokens } = useTheme();
 
-  // Tutorial Management
+  // Initialize settings when user is available
   useEffect(() => {
-    const tutorialSeen = localStorage.getItem('tutorial_completed');
-    setHasSeenTutorial(!!tutorialSeen);
-    if (!tutorialSeen) {
-      setShowTutorial(true);
+    if (user) {
+      const manager = new SettingsManager(user.username || user.userId);
+      setSettingsManager(manager);
+      
+      manager.loadSettings()
+        .then(loadedSettings => {
+          setSettings(loadedSettings);
+        })
+        .catch(error => {
+          console.error('Failed to load settings:', error);
+          addNotification({
+            type: 'ERROR',
+            message: 'Failed to load game settings'
+          });
+        });
     }
-  }, []);
+  }, [user]);
 
-  // Game Initialization
+  // Initialize kingdom when user is available
   useEffect(() => {
-    if (user && !hasInitialized) {
-      setHasInitialized(true);
+    if (user) {
+      console.log('Initializing game for user:', user);
       initializeGame();
     }
-  }, [user, hasInitialized]);
+  }, [user]);
 
-  // Game Functions
-  async function cleanupKingdom() {
-    try {
-      const { data: existingKingdoms } = await client.models.Kingdom.list({
-        filter: { owner: { eq: user.username || user.userId } }
-      });
-      
-      if (existingKingdoms?.length > 0) {
-        for (const kingdom of existingKingdoms) {
-          if (!kingdom?.id) continue;
-
-          try {
-            const { data: resources } = await client.models.Resource.list({
-              filter: { kingdomId: { eq: kingdom.id } }
-            });
-            
-            for (const resource of resources || []) {
-              if (resource?.id) {
-                await client.models.Resource.delete({ id: resource.id });
-              }
-            }
-
-            const { data: events } = await client.models.Event.list({
-              filter: { kingdomId: { eq: kingdom.id } }
-            });
-            
-            for (const event of events || []) {
-              if (event?.id) {
-                await client.models.Event.delete({ id: event.id });
-              }
-            }
-
-            await client.models.Kingdom.delete({ id: kingdom.id });
-          } catch (e) {
-            console.warn(`Error cleaning up kingdom ${kingdom.id}:`, e);
-          }
-        }
-      }
-    } catch (e) {
-      console.warn("Error during cleanup:", e);
+  // Initialize services when kingdom is available
+  useEffect(() => {
+    if (kingdom?.id) {
+      setEventGenerator(new EventGenerator(kingdom.id));
+      setTurnManager(new TurnManager(kingdom.id));
     }
-  }
+  }, [kingdom?.id]);
 
-  async function initializeGame(loadExisting = true) {
-    setLoading(true);
-    setError(null);
-    setNotifications([]);
-    setCurrentEvent(null);
+//... in App.jsx
 
-    try {
-      if (loadExisting) {
-        const { data: existingKingdoms } = await client.models.Kingdom.list({
+async function initializeGame(loadExisting = true) {
+  console.log('Starting game initialization...');
+  setLoading(true);
+  setError(null);
+
+  try {
+    if (!user) {
+      throw new Error('No user found');
+    }
+
+    if (loadExisting) {
+      console.log('Checking for existing kingdoms...');
+      try {
+        const { data: kingdoms } = await client.models.Kingdom.list({
           filter: { owner: { eq: user.username || user.userId } }
         });
 
-        const validKingdom = existingKingdoms?.find(k => k?.id);
-        
-        if (validKingdom) {
-          setKingdom(validKingdom);
-          
-          const newEventGenerator = new EventGenerator(validKingdom.id);
-          const newResourceManager = new ResourceManagerService(validKingdom.id);
-          
-          setEventGenerator(newEventGenerator);
-          setResourceManager(newResourceManager);
+        if (kingdoms?.length > 0) {
+          const validKingdom = kingdoms.find(k => 
+            k && k.id && 
+            typeof k.population === 'number' &&
+            typeof k.economy === 'number' &&
+            typeof k.military === 'number' &&
+            typeof k.happiness === 'number'
+          );
 
-          await loadKingdomResources(validKingdom.id);
-          setTurn(validKingdom.turn || 1);
-          setLoading(false);
-          return;
+          if (validKingdom) {
+            console.log('Found valid kingdom:', validKingdom);
+
+            setKingdom(validKingdom);
+            setTurn(validKingdom.turn || 1);
+            setLoading(false);
+            return;
+          }
         }
+      } catch (listError) {
+        console.error('Error listing kingdoms:', listError);
       }
-
-      await cleanupKingdom();
-
-      const kingdomData = {
-        name: "Your Kingdom",
-        population: 1000,
-        economy: 50,
-        military: 30,
-        happiness: 70,
-        description: "A new kingdom rises!",
-        turn: 1,
-        owner: user.username || user.userId
-      };
-
-      const response = await client.models.Kingdom.create(kingdomData);
-      if (!response?.data) throw new Error("Failed to create kingdom");
-
-      const newKingdom = response.data;
-      setKingdom(newKingdom);
-      setTurn(1);
-
-      const newEventGenerator = new EventGenerator(newKingdom.id);
-      const newResourceManager = new ResourceManagerService(newKingdom.id);
-      
-      setEventGenerator(newEventGenerator);
-      setResourceManager(newResourceManager);
-
-      await newResourceManager.initializeResources();
-      await loadKingdomResources(newKingdom.id);
-
-    } catch (error) {
-      console.error("Game initialization error:", error);
-      setError(error.message || "Failed to initialize game");
-      setKingdom(null);
-      setEventGenerator(null);
-      setResourceManager(null);
-      setResources([]);
-      setTurn(1);
-    } finally {
-      setLoading(false);
     }
+
+    // Create new kingdom
+    console.log('Creating new kingdom...');
+    const kingdomData = {
+      name: "Your Kingdom",
+      population: 1000,
+      economy: 50,
+      military: 30,
+      happiness: 70,
+      description: "A new kingdom rises!",
+      turn: 1,
+      lastUpdated: new Date().toISOString(),
+      owner: user.username || user.userId,
+      difficulty: settings?.difficulty || 'NORMAL'
+    };
+
+    const { data: newKingdom } = await client.models.Kingdom.create(kingdomData);
+
+    if (!newKingdom) {
+      throw new Error('Failed to create new kingdom');
+    }
+
+    console.log('Successfully created new kingdom:', newKingdom);
+    setKingdom(newKingdom);
+    setTurn(1);
+
+  } catch (error) {
+    console.error('Game initialization error:', error);
+    setError(`Failed to initialize game: ${error.message}`);
+    setKingdom(null);
+    setTurn(1);
+  } finally {
+    setLoading(false);
+  }
+}
+
+  function addNotification(notification) {
+    setNotifications(prev => {
+      const isDuplicate = prev.some(n => 
+        n.message === notification.message && 
+        n.type === notification.type
+      );
+
+      if (!isDuplicate) {
+        const newNotifications = [...prev, notification];
+        if (notification.type !== 'CRITICAL') {
+          setTimeout(() => {
+            setNotifications(current => 
+              current.filter(n => n !== notification)
+            );
+          }, 5000);
+        }
+        return newNotifications;
+      }
+      return prev;
+    });
   }
 
-  // Resource Management
-  async function loadKingdomResources(kingdomId) {
-    if (!kingdomId) {
-      console.warn("No kingdom ID provided");
-      setResources([]);
-      return;
-    }
-  
-    try {
-      const resourceMgr = new ResourceManagerService(kingdomId);
-      const resourceReport = await resourceMgr.getResourceReport(kingdom);
-      setResources(resourceReport);
-    } catch (error) {
-      console.error("Error loading resources:", error);
-      setError("Failed to load resources");
-      setResources([]);
-    }
-  }
-
-  // Notification Management
   function handleDismissNotification(index) {
     setNotifications(prev => prev.filter((_, i) => i !== index));
   }
 
-  function addNotification(notification) {
-    const isDuplicate = notifications.some(n => 
-      n.message === notification.message && 
-      n.type === notification.type
-    );
-
-    if (!isDuplicate) {
-      setNotifications(prev => [...prev, notification]);
-      if (notification.type !== 'CRITICAL') {
-        setTimeout(() => {
-          setNotifications(prev => 
-            prev.filter(n => n.message !== notification.message)
-          );
-        }, 5000);
-      }
-    }
-  }
-
-  // Event Management
-  async function generateNewEvent() {
+  async function handleSettingsSave(newSettings) {
     try {
-      if (!eventGenerator || !kingdom) {
-        console.warn("Cannot generate event: missing dependencies");
-        return;
-      }
-
-      const kingdomState = {
-        happiness: kingdom.happiness,
-        economy: kingdom.economy,
-        military: kingdom.military,
-        population: kingdom.population,
-        owner: kingdom.owner
-      };
-
-      const newEvent = await eventGenerator.generateEvent(kingdomState);
-      if (!newEvent) throw new Error("Failed to generate event");
-
-      setCurrentEvent(newEvent);
-    } catch (error) {
-      console.error("Error generating event:", error);
-      setCurrentEvent({
-        title: "Peaceful Times",
-        description: "The kingdom enjoys a moment of peace and stability.",
-        type: "RANDOM",
-        choices: JSON.stringify([
-          {
-            text: "Maintain the peace",
-            impact: JSON.stringify({ happiness: 5 })
-          },
-          {
-            text: "Prepare for the future",
-            impact: JSON.stringify({ military: 5, economy: 5, happiness: -5 })
-          }
-        ]),
-        timestamp: new Date().toISOString(),
-        owner: kingdom.owner
+      if (!settingsManager) throw new Error('Settings manager not initialized');
+      
+      const updatedSettings = await settingsManager.saveSettings(newSettings);
+      setSettings(updatedSettings);
+      
+      addNotification({
+        type: 'SUCCESS',
+        message: 'Settings saved successfully'
       });
+      
+      // Apply difficulty changes if needed
+      if (updatedSettings.difficulty !== settings?.difficulty) {
+        await initializeGame(false);
+      }
+    } catch (error) {
+      console.error('Failed to save settings:', error);
+      throw error;
     }
   }
 
   async function handleEventChoice(choice) {
     try {
+      setLoading(true);
+      
+      if (!turnManager) {
+        throw new Error('Turn manager not initialized');
+      }
+
       const impact = typeof choice.impact === 'string' 
         ? JSON.parse(choice.impact) 
         : choice.impact;
       
-      // Calculate resource impacts
-      const resourceImpacts = calculateEventResourceImpact(choice, resources, kingdom);
-      
-      // Update kingdom stats
-      const newStats = {
-        population: Math.max(0, kingdom.population + (impact.population || 0)),
-        economy: Math.max(0, kingdom.economy + (impact.economy || 0)),
-        military: Math.max(0, kingdom.military + (impact.military || 0)),
-        happiness: Math.max(0, Math.min(100, kingdom.happiness + (impact.happiness || 0)))
+      // Apply choice impacts
+      const updatedStats = {
+        ...kingdom,
+        population: Math.max(
+          GAME_CONFIG.MIN_POPULATION,
+          Math.min(
+            GAME_CONFIG.MAX_POPULATION,
+            kingdom.population + (impact.population || 0)
+          )
+        ),
+        economy: Math.max(
+          GAME_CONFIG.MIN_ECONOMY,
+          Math.min(
+            GAME_CONFIG.MAX_ECONOMY,
+            kingdom.economy + (impact.economy || 0)
+          )
+        ),
+        military: Math.max(
+          GAME_CONFIG.MIN_MILITARY,
+          Math.min(
+            GAME_CONFIG.MAX_MILITARY,
+            kingdom.military + (impact.military || 0)
+          )
+        ),
+        happiness: Math.max(
+          GAME_CONFIG.MIN_HAPPINESS,
+          Math.min(
+            GAME_CONFIG.MAX_HAPPINESS,
+            kingdom.happiness + (impact.happiness || 0)
+          )
+        )
       };
 
-      const { data: updatedKingdom } = await client.models.Kingdom.update({
-        id: kingdom.id,
-        ...newStats
-      });
+      const turnResult = await turnManager.processTurn(updatedStats);
       
-      setKingdom(updatedKingdom);
+      if (!turnResult.success) {
+        throw new Error(turnResult.error || 'Failed to process turn');
+      }
+
+      setKingdom(turnResult.kingdom);
+      setTurnSummary(turnResult.summary);
       setCurrentEvent(null);
+      setTurn(prev => prev + 1);
 
-      // Process resources
-      if (resourceManager) {
-        const resourceResult = await resourceManager.processTurn(updatedKingdom);
-        
-        Object.entries(resourceImpacts).forEach(([resourceType, impact]) => {
-          if (impact !== 0) {
-            addNotification({
-              type: impact < 0 ? 'WARNING' : 'INFO',
-              message: `${resourceType}: ${impact > 0 ? '+' : ''}${impact}`
-            });
-          }
-        });
-
-        if (resourceResult.notifications?.length > 0) {
-          resourceResult.notifications.forEach(notification => {
-            addNotification(notification);
-          });
-        }
-
-        await loadKingdomResources(kingdom.id);
-      }
-
-      // Update turn and check game state
-      const newTurn = turn + 1;
-      setTurn(newTurn);
-
-      const gameState = GameStateManager.getGameState(updatedKingdom, newTurn);
-      
-      if (gameState.isGameOver) {
-        const message = gameState.victory 
-          ? `Victory! ${gameState.message}`
-          : `Defeat! ${gameState.message}`;
-        setError(`${message}\nYour reign lasted ${newTurn} turns.`);
-        return;
-      }
-
-      gameState.warnings?.forEach(warning => {
-        addNotification({
-          type: 'WARNING',
-          message: warning
-        });
-      });
+      turnResult.notifications?.forEach(addNotification);
 
     } catch (error) {
       console.error("Error handling event choice:", error);
-      setError("Failed to process your choice");
-    }
-  }
-
-  async function handleTurnProgression() {
-    if (loading || error) return;
-
-    try {
-      setLoading(true);
-      const gameState = GameStateManager.getGameState(kingdom, turn);
-      
-      if (gameState.isGameOver) {
-        setError(`Game Over! ${gameState.message}\nYour reign lasted ${turn} turns.`);
-        return;
-      }
-
-      gameState.warnings?.forEach(warning => {
-        addNotification({
-          type: 'WARNING',
-          message: warning
-        });
+      addNotification({
+        type: 'CRITICAL',
+        message: 'Failed to process your choice: ' + error.message
       });
-
-      if (!currentEvent) {
-        await generateNewEvent();
-      }
-
-    } catch (error) {
-      console.error("Error processing turn:", error);
-      setError("Failed to process turn");
     } finally {
       setLoading(false);
     }
   }
 
-  // Tutorial Management
-  const handleTutorialComplete = () => {
-    setShowTutorial(false);
-    setHasSeenTutorial(true);
-    localStorage.setItem('tutorial_completed', 'true');
+  async function handleTurnProgress() {
+    if (!kingdom || loading) return;
+
+    try {
+      setLoading(true);
+      
+      if (!turnManager) {
+        throw new Error('Turn manager not initialized');
+      }
+
+      const turnResult = await turnManager.processTurn(kingdom);
+      
+      if (!turnResult.success) {
+        throw new Error(turnResult.error || 'Failed to process turn');
+      }
+
+      setKingdom(turnResult.kingdom);
+      setTurnSummary(turnResult.summary);
+      setTurn(prev => prev + 1);
+
+      turnResult.notifications?.forEach(addNotification);
+
+      if (!currentEvent && eventGenerator) {
+        try {
+          const event = await eventGenerator.generateEvent({
+            ...turnResult.kingdom,
+            owner: kingdom.owner
+          });
+          setCurrentEvent(event);
+        } catch (error) {
+          console.error("Error generating event:", error);
+          addNotification({
+            type: 'WARNING',
+            message: 'Failed to generate event'
+          });
+        }
+      }
+
+    } catch (error) {
+      console.error('Turn progression error:', error);
+      addNotification({
+        type: 'ERROR',
+        message: `Turn progression failed: ${error.message}`
+      });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const [showNewGameConfirm, setShowNewGameConfirm] = useState(false);
+
+  const handleNewGameClick = () => {
+    if (kingdom && kingdom.id) {
+      setShowNewGameConfirm(true);
+    } else {
+      initializeGame(false);
+    }
   };
 
-  // New Game Management
-  const handleNewGame = () => {
-    setShowNewGameConfirm(true);
-  };
-
-  const confirmNewGame = () => {
-    setShowNewGameConfirm(false);
-    initializeGame(false);
-  };
-
-  // Render
   return (
     <View className="game-container">
-      <TutorialOverlay 
-        visible={showTutorial} 
-        onComplete={handleTutorialComplete}
+{kingdom && kingdom.id ? (
+  <ResourceProvider kingdom={kingdom}>
+    <Flex direction="column" gap="2rem" style={{ padding: '2rem' }}>
+      {/* Header */}
+      <Flex justifyContent="space-between" alignItems="center">
+        <Heading level={1}>Kingdom's Reign</Heading>
+        <Flex gap="2rem" alignItems="center">
+          <Text fontSize="1.2em">Turn: {turn}</Text>
+          {/* Add Start New Game button */}
+          <Button 
+            onClick={handleNewGameClick}  // Use this instead of direct initializeGame call
+            variation="default"
+          >
+            Start New Game
+          </Button>
+          <Button onClick={() => setShowSettings(true)}>Settings</Button>
+          <Button onClick={signOut}>Sign Out</Button>
+        </Flex>
+      </Flex>
+
+      {/* Loading State */}
+      {loading && (
+        <Alert variation="info">
+          Processing kingdom updates...
+        </Alert>
+      )}
+
+      {/* Error State */}
+      {error && (
+        <Alert
+          variation="error"
+          isDismissible={true}
+          onDismiss={() => setError(null)}
+        >
+          <Text>{error}</Text>
+        </Alert>
+      )}
+
+      {/* Notifications */}
+      <NotificationCenter 
+        notifications={notifications}
+        onDismiss={handleDismissNotification}
       />
 
-      <Flex direction="column" gap="2rem" padding="2rem">
-        <Flex justifyContent="space-between" alignItems="center">
-          <Heading level={1}>Kingdom's Reign</Heading>
-          <Flex gap="2rem" alignItems="center">
-            <Text fontSize="1.2em">Turn: {turn}</Text>
-            <HelpButton />
-          </Flex>
-        </Flex>
-
-        {loading && (
-          <Alert variation="info" isDismissible={false} heading="Loading">
-            Initializing your kingdom...
-          </Alert>
-        )}
-
-        {error && (
-          <Alert
-            variation="error"
-            isDismissible={true}
-            onDismiss={() => setError(null)}
-            heading="Error"
-          >
-            {error}
-            <Button onClick={() => initializeGame(false)} marginTop="1rem">
-              Start New Game
-            </Button>
-          </Alert>
-        )}
-
-        <NotificationCenter 
-          notifications={notifications}
-          onDismiss={handleDismissNotification}
+      {/* Settings Panel */}
+      {showSettings && (
+        <SettingsPanel
+          initialSettings={settings}
+          onSave={handleSettingsSave}
+          onClose={() => setShowSettings(false)}
         />
+      )}
 
-        {!loading && !error && kingdom && (
-          <Flex direction="column" gap="2rem">
-            <KingdomStats kingdom={kingdom} />
-            <ResourceManager 
-              resources={resources}
-              kingdom={kingdom}
+{showNewGameConfirm && (
+  <Alert
+    variation="warning"
+    isDismissible={true}
+    heading="Start New Game?"
+    onDismiss={() => setShowNewGameConfirm(false)}
+  >
+    <Text>Starting a new game will erase your current progress. Are you sure?</Text>
+    <Flex gap="1rem" marginTop="1rem">
+      <Button
+        onClick={() => {
+          setShowNewGameConfirm(false);
+          initializeGame(false);
+        }}
+        variation="primary"
+      >
+        Yes, Start New Game
+      </Button>
+      <Button
+        onClick={() => setShowNewGameConfirm(false)}
+        variation="link"
+      >
+        Cancel
+      </Button>
+    </Flex>
+  </Alert>
+)}
+
+      {/* Game Content */}
+      {!loading && !error && (
+        <Flex direction="column" gap="2rem">
+          <KingdomStats kingdom={kingdom} />
+          <ResourceManager 
+            onNotification={addNotification}  // Pass notification handler
+          />
+          
+          {/* Turn Summary */}
+          {turnSummary && !currentEvent && (
+            <TurnSummary summary={turnSummary} />
+          )}
+
+          {/* Event or Turn Progress */}
+          {currentEvent ? (
+            <EventSystem 
+              event={currentEvent}
+              onChoiceSelect={handleEventChoice}
             />
-            
-            {currentEvent ? (
-              <EventSystem 
-                event={currentEvent}
-                onChoiceSelect={handleEventChoice}
-              />
-            ) : (
-              <Card padding="2rem" textAlign="center">
+          ) : (
+            <Card style={{ padding: '2rem', textAlign: 'center' }}>
+              <Flex gap="1rem" justifyContent="center">
                 <Button 
-                  onClick={handleTurnProgression}
+                  onClick={handleTurnProgress}
                   size="large"
                   variation="primary"
+                  isDisabled={loading}
                 >
                   Next Turn
                 </Button>
-              </Card>
-            )}
+              </Flex>
+            </Card>
+          )}
+        </Flex>
+      )}
+    </Flex>
+  </ResourceProvider>
+      ) : (
+        // Initial/Error state
+        <Flex direction="column" style={{ padding: '2rem' }} gap="1rem">
+          <Heading level={1}>Kingdom's Reign</Heading>
+          
+          {/* Header with settings if needed */}
+          <Flex justifyContent="flex-end">
+            <Button onClick={() => setShowSettings(true)}>Settings</Button>
           </Flex>
-        )}
-        
-        <Card padding="1rem" variation="outlined">
-          <Flex justifyContent="space-between" alignItems="center">
-            <Flex gap="1rem">
-              <Button
-                onClick={handleNewGame}
-                isDisabled={loading}
-                variation="primary"
-                size="large"
-              >
-                Start New Game
-              </Button>
-              {kingdom?.id && (
-                <Button
-                  onClick={() => initializeGame(true)}
-                  isDisabled={loading}
-                  variation="default"
-                  size="large"
-                >
-                  Load Game
-                </Button>
-              )}
-            </Flex>
-            <Button 
-              onClick={signOut}
-              variation="warning"
-              size="large"
-            >
-              Sign Out
-            </Button>
-          </Flex>
-
-          {showNewGameConfirm && (
-            <Alert
-              variation="warning"
+  
+          {loading ? (
+            <Alert variation="info">Initializing your kingdom...</Alert>
+          ) : error ? (
+            <Alert 
+              variation="error"
               isDismissible={true}
-              onDismiss={() => setShowNewGameConfirm(false)}
-              heading="Start New Game?"
-              marginTop="1rem"
+              onDismiss={() => setError(null)}
             >
-              <Text>Starting a new game will erase your current progress. Are you sure?</Text>
-              <Flex gap="1rem" marginTop="1rem">
-                <Button
-                  onClick={confirmNewGame}
+              <Text>{error}</Text>
+              <Flex marginTop="1rem" gap="1rem">
+                <Button 
+                  onClick={() => initializeGame(false)}
                   variation="primary"
                 >
-                  Yes, Start New Game
+                  Start New Game
                 </Button>
-                <Button
-                  onClick={() => setShowNewGameConfirm(false)}
-                  variation="default"
+                <Button 
+                  onClick={() => initializeGame(true)}
+                  variation="link"
                 >
-                  Cancel
+                  Try Loading Existing Game
                 </Button>
               </Flex>
             </Alert>
-          )}
-        </Card>
-      </Flex>
+          ) : (
+            // Welcome screen with start options
+            <Card padding="2rem">
+              <Flex direction="column" gap="1.5rem" alignItems="center">
+                <Heading level={3}>Welcome to Kingdom's Reign</Heading>
+                <Text>Choose how you would like to begin:</Text>
+                <Flex gap="1rem">
+                  <Button 
+                    onClick={() => initializeGame(false)}
+                    variation="primary"
+                    size="large"
+                  >
+                    Start New Game
+                  </Button>
+                  <Button 
+                    onClick={() => initializeGame(true)}
+                    variation="link"
+                    size="large"
+                  >
+                    Load Existing Game
+                  </Button>
+                </Flex>
+              </Flex>
+            </Card>
+            )}
+          </Flex>
+      )}
     </View>
   );
 }
 
 export default function App() {
   return (
-    <Authenticator>
-      {({ signOut }) => <GameContent signOut={signOut} />}
-    </Authenticator>
+    <ErrorBoundary>
+      <Authenticator>
+        {({ signOut }) => <GameContent signOut={signOut} />}
+      </Authenticator>
+    </ErrorBoundary>
   );
 }

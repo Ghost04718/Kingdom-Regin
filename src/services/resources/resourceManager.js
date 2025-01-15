@@ -1,163 +1,248 @@
 // src/services/resources/resourceManager.js
 import { generateClient } from 'aws-amplify/data';
+import { 
+  BASE_RESOURCE_CONFIG,
+  calculateModifiedResourceRates,
+  calculateResourceStatus,
+  calculateResourceEfficiency,
+  predictResourceTrend
+} from '../../constants/resourceConstants';
 
 const client = generateClient();
 
-const RESOURCE_CONFIG = {
-  GOLD: {
-    baseProduction: 50,
-    baseConsumption: 30,
-    minQuantity: 100,
-    maxStorage: 10000,
-  },
-  FOOD: {
-    baseProduction: 100,
-    baseConsumption: 50,
-    minQuantity: 200,
-    maxStorage: 5000,
-  },
-  MILITARY_SUPPLIES: {
-    baseProduction: 30,
-    baseConsumption: 20,
-    minQuantity: 100,
-    maxStorage: 3000,
-  }
-};
-
-class ResourceManager {
+class ResourceManagerService {
   constructor(kingdomId) {
     if (!kingdomId) {
       throw new Error('Kingdom ID is required for ResourceManager');
     }
     this.kingdomId = kingdomId;
+    console.log('ResourceManager constructed with kingdomId:', kingdomId);
   }
 
-  async initializeResources() {
-    console.log("Initializing resources for kingdom:", this.kingdomId);
-
+  async getResourceReport(kingdom) {
     try {
-      // Check for existing resources first with retry logic
-      let existingResources;
-      let retryCount = 0;
-      const maxRetries = 3;
+      console.log("Getting resource report for kingdom:", this.kingdomId);
+      
+      // First, let's try a simple list operation with detailed error logging
+      let response;
+      try {
+        response = await client.models.Resource.list({
+          filter: { kingdomId: { eq: this.kingdomId } }
+        });
+        console.log('Raw response from resource list:', response);
+      } catch (listError) {
+        console.error('Direct error from list operation:', listError);
+        throw new Error(`List operation failed: ${listError.message}`);
+      }
 
-      while (retryCount < maxRetries) {
-        try {
-          const { data: resources } = await client.models.Resource.list({
-            filter: { kingdomId: { eq: this.kingdomId } }
-          });
-          existingResources = resources;
-          break;
-        } catch (error) {
-          console.warn(`Failed to fetch resources, attempt ${retryCount + 1}:`, error);
-          retryCount++;
-          if (retryCount === maxRetries) throw error;
-          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+      // Check for errors in response
+      if (response.errors) {
+        console.error('Response errors:', response.errors);
+        // Instead of throwing error, we'll just log it and continue with initialization
+        return [];
+      }
+
+      // Validate response.data
+      if (!response.data || !Array.isArray(response.data)) {
+        console.log('No valid resources data found, returning empty array');
+        return [];
+      }
+
+      // Filter and validate resources
+      const validResources = response.data.filter(resource => {
+        if (!resource || typeof resource !== 'object') {
+          console.log('Invalid resource object:', resource);
+          return false;
         }
-      }
+        if (!resource.id || !resource.type) {
+          console.log('Resource missing required fields:', resource);
+          return false;
+        }
+        if (!BASE_RESOURCE_CONFIG[resource.type]) {
+          console.log('Resource has invalid type:', resource.type);
+          return false;
+        }
+        return true;
+      });
 
-      if (existingResources && existingResources.length > 0) {
-        console.log("Resources already exist for this kingdom");
-        return existingResources;
-      }
+      console.log('Valid resources found:', validResources.length);
 
-      const initialResources = Object.entries(RESOURCE_CONFIG).map(([type, config]) => ({
-        name: type.charAt(0) + type.slice(1).toLowerCase().replace('_', ' '),
-        type,
-        quantity: Math.floor(config.maxStorage * 0.2),
-        production: config.baseProduction,
-        consumption: config.baseConsumption,
-        minQuantity: config.minQuantity,
-        maxStorage: config.maxStorage,
-        kingdomId: this.kingdomId,
-        owner: this.kingdomId.split('_')[0]
+      // Process valid resources
+      const enrichedResources = await Promise.all(validResources.map(async (resource) => {
+        try {
+          const baseConfig = BASE_RESOURCE_CONFIG[resource.type];
+          
+          // Create a complete resource object with defaults
+          const completeResource = {
+            id: resource.id,
+            name: resource.name || baseConfig.name,
+            type: resource.type,
+            category: resource.category || baseConfig.category,
+            quantity: typeof resource.quantity === 'number' ? resource.quantity : baseConfig.baseProduction * 10,
+            production: typeof resource.production === 'number' ? resource.production : baseConfig.baseProduction,
+            consumption: typeof resource.consumption === 'number' ? resource.consumption : baseConfig.baseConsumption,
+            baseProduction: baseConfig.baseProduction,
+            baseConsumption: baseConfig.baseConsumption,
+            minQuantity: baseConfig.minQuantity,
+            maxStorage: baseConfig.maxStorage,
+            qualityLevel: resource.qualityLevel || 1,
+            dependencies: JSON.stringify(baseConfig.dependencies || {}),
+            statusEffects: JSON.stringify(baseConfig.statusEffects || {}),
+            status: 'NORMAL',
+            lastUpdated: new Date().toISOString(),
+            kingdomId: this.kingdomId,
+            owner: resource.owner
+          };
+
+          // Calculate rates and stats
+          const rates = calculateModifiedResourceRates(completeResource, kingdom, validResources);
+          const efficiency = calculateResourceEfficiency(completeResource);
+          const status = calculateResourceStatus(completeResource);
+          const trends = predictResourceTrend(completeResource);
+
+          // Combine everything into final resource object
+          return {
+            ...completeResource,
+            production: rates.production,
+            consumption: rates.consumption,
+            netChange: rates.production - rates.consumption,
+            efficiency,
+            status,
+            trends: JSON.stringify(trends)
+          };
+
+        } catch (processError) {
+          console.error(`Error processing resource ${resource.id}:`, processError);
+          // Return a safe version of the resource
+          const baseConfig = BASE_RESOURCE_CONFIG[resource.type];
+          return {
+            id: resource.id,
+            name: resource.name || baseConfig.name,
+            type: resource.type,
+            category: baseConfig.category,
+            quantity: baseConfig.baseProduction * 10,
+            production: baseConfig.baseProduction,
+            consumption: baseConfig.baseConsumption,
+            status: 'ERROR',
+            qualityLevel: 1,
+            kingdomId: this.kingdomId,
+            owner: resource.owner,
+            lastUpdated: new Date().toISOString()
+          };
+        }
       }));
 
-      console.log("Creating initial resources:", initialResources);
-
-      // Create resources with retry logic
-      const createdResources = [];
-      for (const resource of initialResources) {
-        retryCount = 0;
-        while (retryCount < maxRetries) {
-          try {
-            const response = await client.models.Resource.create(resource);
-            createdResources.push(response.data);
-            break;
-          } catch (error) {
-            console.warn(`Failed to create resource, attempt ${retryCount + 1}:`, error);
-            retryCount++;
-            if (retryCount === maxRetries) throw error;
-            await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
-          }
-        }
-      }
-
-      console.log("Resources created successfully:", createdResources);
-      return createdResources;
+      return enrichedResources;
 
     } catch (error) {
-      console.error("Error initializing resources:", error);
-      throw new Error(`Failed to initialize resources: ${error.message}`);
+      console.error("Error in getResourceReport:", error);
+      // Instead of throwing, return empty array to allow initialization
+      return [];
     }
   }
 
-  async processTurn(kingdom) {
+  async initializeResources(userId) {
+    console.log("Starting initializeResources for kingdom:", this.kingdomId, "userId:", userId);
+
     try {
-      const { data: resources } = await client.models.Resource.list({
+      // Check for existing resources
+      const { data: existingResources } = await client.models.Resource.list({
         filter: { kingdomId: { eq: this.kingdomId } }
       });
 
-      const notifications = [];
-      const resourceUpdates = [];
-
-      for (const resource of resources) {
-        // Calculate production based on kingdom stats
-        let production = resource.production;
-        let consumption = resource.consumption;
-
-        // Adjust consumption based on kingdom size
-        if (resource.type === 'FOOD') {
-          consumption *= (kingdom.population / 1000);
-        }
-        if (resource.type === 'MILITARY_SUPPLIES') {
-          consumption *= (kingdom.military / 50);
-        }
-
-        // Calculate new quantity
-        const netChange = production - consumption;
-        const newQuantity = Math.max(0, 
-          Math.min(
-            resource.maxStorage,
-            resource.quantity + netChange
-          )
-        );
-
-        // Check for warnings
-        if (newQuantity <= resource.minQuantity) {
-          notifications.push({
-            type: 'CRITICAL',
-            message: `${resource.name} has reached critical levels!`
-          });
-        }
-
-        // Update resource
-        resourceUpdates.push(
-          client.models.Resource.update({
-            id: resource.id,
-            quantity: newQuantity,
-          })
-        );
+      if (existingResources?.length > 0) {
+        console.log("Found existing resources:", existingResources);
+        return existingResources;
       }
 
-      await Promise.all(resourceUpdates);
+      console.log("No existing resources found, creating new ones...");
+      
+      const createdResources = [];
+      
+      // Create each resource type defined in BASE_RESOURCE_CONFIG
+      for (const [type, config] of Object.entries(BASE_RESOURCE_CONFIG)) {
+        try {
+          const resourceData = {
+            name: config.name,
+            type: type,
+            category: config.category,
+            quantity: config.baseProduction * 10,
+            production: config.baseProduction,
+            consumption: config.baseConsumption,
+            baseProduction: config.baseProduction,
+            baseConsumption: config.baseConsumption,
+            minQuantity: config.minQuantity,
+            maxStorage: config.maxStorage,
+            status: 'NORMAL',
+            qualityLevel: 1,
+            efficiency: 100,
+            dependencies: JSON.stringify(config.dependencies || {}),
+            statusEffects: JSON.stringify(config.statusEffects || {}),
+            trends: JSON.stringify([]),
+            lastUpdated: new Date().toISOString(),
+            kingdomId: this.kingdomId,
+            owner: userId
+          };
+
+          const { data: resource } = await client.models.Resource.create(resourceData);
+          
+          if (!resource) {
+            throw new Error(`Failed to create resource: ${type}`);
+          }
+          
+          createdResources.push(resource);
+          console.log(`Successfully created resource: ${type}`);
+          
+        } catch (error) {
+          console.error(`Error creating resource ${type}:`, error);
+          throw error;
+        }
+      }
+
+      return createdResources;
+
+    } catch (error) {
+      console.error("Error in initializeResources:", error);
+      throw error;
+    }
+  }
+
+  async upgradeResource(resourceId) {
+    try {
+      const { data: resource } = await client.models.Resource.get({ id: resourceId });
+      
+      if (!resource) {
+        throw new Error('Resource not found');
+      }
+
+      const config = BASE_RESOURCE_CONFIG[resource.type];
+      const nextLevel = resource.qualityLevel + 1;
+
+      if (!config.qualityLevels[nextLevel]) {
+        throw new Error('Maximum level reached');
+      }
+
+      const qualityMultipliers = config.qualityLevels[nextLevel];
+      const newMaxStorage = Math.floor(config.maxStorage * qualityMultipliers.storageMultiplier);
+
+      const updatedResource = {
+        ...resource,
+        qualityLevel: nextLevel,
+        maxStorage: newMaxStorage,
+        production: Math.floor(resource.baseProduction * qualityMultipliers.productionMultiplier),
+        consumption: Math.floor(resource.baseConsumption * qualityMultipliers.consumptionMultiplier),
+        lastUpdated: new Date().toISOString()
+      };
+
+      const { data: result } = await client.models.Resource.update(updatedResource);
 
       return {
         success: true,
-        notifications
+        resource: result
       };
+
     } catch (error) {
-      console.error("Error processing resource turn:", error);
+      console.error('Error upgrading resource:', error);
       return {
         success: false,
         error: error.message
@@ -165,28 +250,96 @@ class ResourceManager {
     }
   }
 
-  async getResourceReport() {
-    try {
-      const { data: resources } = await client.models.Resource.list({
-        filter: { kingdomId: { eq: this.kingdomId } }
-      });
+// src/services/resources/resourceManager.js
 
-      return resources.map(resource => ({
-        id: resource.id,
-        name: resource.name,
-        quantity: resource.quantity,
-        production: resource.production,
-        consumption: resource.consumption,
-        netChange: resource.production - resource.consumption,
-        critical: resource.quantity <= resource.minQuantity,
-        storageLimit: resource.maxStorage,
-        storagePercentage: Math.floor((resource.quantity / resource.maxStorage) * 100)
-      }));
-    } catch (error) {
-      console.error("Error generating resource report:", error);
-      throw error;
+// ... previous methods remain the same ...
+
+async processTurn(kingdom) {
+  try {
+    console.log("Processing turn for kingdom:", this.kingdomId);
+    const resources = await this.getResourceReport(kingdom);
+    const notifications = [];
+    const updatedResources = [];
+
+    for (const resource of resources) {
+      try {
+        // Calculate new quantity based on production/consumption
+        const netChange = resource.production - resource.consumption;
+        const newQuantity = Math.max(0, 
+          Math.min(
+            resource.maxStorage,
+            resource.quantity + netChange
+          )
+        );
+
+        // Prepare update data with only valid fields
+        const updateData = {
+          id: resource.id,
+          quantity: newQuantity,
+          lastUpdated: new Date().toISOString(),
+          production: resource.production,
+          consumption: resource.consumption,
+          status: resource.status,
+          efficiency: resource.efficiency || 100
+        };
+
+        // Update resource
+        const { data: result } = await client.models.Resource.update(updateData);
+        
+        if (!result) {
+          throw new Error(`Failed to update resource: ${resource.name}`);
+        }
+        
+        updatedResources.push(result);
+
+        // Generate notifications based on status
+        if (newQuantity <= resource.minQuantity) {
+          notifications.push({
+            type: 'CRITICAL',
+            message: `${resource.name} has reached critical levels!`
+          });
+        } else if (newQuantity <= resource.minQuantity * 1.5) {
+          notifications.push({
+            type: 'WARNING',
+            message: `${resource.name} is running low!`
+          });
+        }
+
+        // Add notification for storage capacity
+        if (newQuantity >= resource.maxStorage * 0.9) {
+          notifications.push({
+            type: 'WARNING',
+            message: `${resource.name} storage is nearly full!`
+          });
+        }
+
+      } catch (error) {
+        console.error(`Error processing resource ${resource.name}:`, error);
+        notifications.push({
+          type: 'ERROR',
+          message: `Failed to process ${resource.name}: ${error.message}`
+        });
+      }
     }
+
+    return {
+      success: true,
+      notifications,
+      resources: updatedResources
+    };
+
+  } catch (error) {
+    console.error('Error processing resource turn:', error);
+    return {
+      success: false,
+      error: error.message,
+      notifications: [{
+        type: 'ERROR',
+        message: 'Failed to process resources'
+      }]
+    };
   }
 }
+}
 
-export default ResourceManager;
+export default ResourceManagerService;
