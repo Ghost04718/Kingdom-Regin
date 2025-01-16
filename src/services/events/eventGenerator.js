@@ -13,69 +13,182 @@ class EventGenerator {
     this.aiService = new AIService();
   }
 
-  async generateEvent(kingdomState) {
+  async generateEvent(kingdomState, activeChain = null) {
     try {
       console.log('Generating event for kingdom state:', kingdomState);
+      console.log('Active chain:', activeChain);
+
+      // If there's an active chain, prioritize chain-related events
+      if (activeChain) {
+        try {
+          const chainEvent = await this._generateChainRelatedEvent(kingdomState, activeChain);
+          if (chainEvent) {
+            console.log('Generated chain-related event:', chainEvent);
+            return chainEvent;
+          }
+        } catch (chainError) {
+          console.warn('Failed to generate chain-related event:', chainError);
+          // Fall back to regular event generation
+        }
+      }
 
       // Get event data either from AI or fallback
       let eventData;
       try {
-        eventData = await this.aiService.generateEvent(kingdomState);
+        eventData = await this.aiService.generateEvent(kingdomState, activeChain);
         console.log('AI generated event:', eventData);
       } catch (aiError) {
         console.warn('AI event generation failed, using fallback system:', aiError);
-        eventData = this._generateFallbackEvent(kingdomState);
+        eventData = this._generateFallbackEvent(kingdomState, activeChain);
       }
 
-      // Validate event data
-      if (!eventData.title || !eventData.description || !eventData.type || !eventData.choices) {
-        throw new Error('Invalid event data structure');
-      }
+      // Add chain interaction if appropriate
+      eventData = this._addChainInteraction(eventData, activeChain);
 
-      // Ensure choices is a string
-      if (typeof eventData.choices !== 'string') {
-        eventData.choices = JSON.stringify(eventData.choices);
-      }
-
-      // Add required fields for database
+      // Create event in database
       const event = {
         ...eventData,
         kingdomId: this.kingdomId,
         owner: kingdomState.owner,
-        impact: JSON.stringify({}), // Add empty impact if not present
-        timestamp: eventData.timestamp || new Date().toISOString()
+        impact: eventData.impact || JSON.stringify({}),
+        timestamp: new Date().toISOString()
       };
 
       console.log('Creating event in database:', event);
+      const { data: createdEvent } = await client.models.Event.create(event);
+      return createdEvent;
 
-      // Create event in database with retry logic
-      let retryCount = 0;
-      const maxRetries = 3;
-      while (retryCount < maxRetries) {
-        try {
-          const { data: createdEvent } = await client.models.Event.create(event);
-          if (!createdEvent) {
-            throw new Error('No event data returned from database');
-          }
-          console.log('Event created successfully:', createdEvent);
-          return createdEvent;
-        } catch (dbError) {
-          console.warn(`Database creation attempt ${retryCount + 1} failed:`, dbError);
-          retryCount++;
-          if (retryCount === maxRetries) {
-            throw new Error('Failed to create event after multiple attempts');
-          }
-          // Wait before retrying
-          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
-        }
-      }
     } catch (error) {
       console.error('Event generation error:', error);
-      // Return a simple fallback event that doesn't require database storage
-      return this._getEmergencyFallbackEvent(kingdomState);
+      return this._getEmergencyFallbackEvent(kingdomState, activeChain);
     }
   }
 
+  async _generateChainRelatedEvent(kingdomState, activeChain) {
+    // Check chain type and current state to generate related events
+    const chainType = activeChain.chainType;
+    const chainOutcomes = activeChain.outcomes || [];
+    
+    // Example: Generate events that reference or relate to the active chain
+    let relatedEvent;
+    switch (chainType) {
+      case 'DIPLOMATIC':
+        relatedEvent = this._generateDiplomaticRelatedEvent(chainOutcomes);
+        break;
+      case 'CRISIS':
+        relatedEvent = this._generateCrisisRelatedEvent(chainOutcomes);
+        break;
+      case 'OPPORTUNITY':
+        relatedEvent = this._generateOpportunityRelatedEvent(chainOutcomes);
+        break;
+      default:
+        return null;
+    }
+
+    return {
+      ...relatedEvent,
+      relatedChainId: activeChain.id
+    };
+  }
+
+  _addChainInteraction(eventData, activeChain) {
+    // If there's an active chain, possibly modify event to reference it
+    if (activeChain) {
+      const modifiedEvent = { ...eventData };
+      let choices = typeof eventData.choices === 'string' ? 
+        JSON.parse(eventData.choices) : eventData.choices;
+
+      // Add chain-aware choices
+      choices = choices.map(choice => ({
+        ...choice,
+        chainImpact: this._calculateChainImpact(choice, activeChain)
+      }));
+
+      // Add chain-specific choice if appropriate
+      if (this._shouldAddChainChoice(eventData, activeChain)) {
+        choices.push(this._generateChainRelatedChoice(activeChain));
+      }
+
+      modifiedEvent.choices = JSON.stringify(choices);
+      modifiedEvent.description = this._addChainContext(
+        modifiedEvent.description, 
+        activeChain
+      );
+
+      return modifiedEvent;
+    }
+
+    return eventData;
+  }
+
+  _calculateChainImpact(choice, activeChain) {
+    // Calculate how this choice might affect the active chain
+    const impact = {};
+    
+    if (activeChain.chainType === 'DIPLOMATIC') {
+      // Example: Choices that affect military might impact diplomatic chains
+      if (choice.impact.military) {
+        impact.diplomatic = -Math.abs(choice.impact.military) / 2;
+      }
+    }
+
+    return impact;
+  }
+
+  _shouldAddChainChoice(eventData, activeChain) {
+    // Determine if we should add a chain-specific choice
+    // Example: Add diplomatic options during a diplomatic chain
+    return activeChain && 
+           eventData.type !== 'RANDOM' && 
+           !eventData.description.includes(activeChain.trigger);
+  }
+
+  _generateChainRelatedChoice(activeChain) {
+    // Generate a choice that specifically relates to the active chain
+    const baseChoice = {
+      chainSpecific: true,
+      continueChain: true
+    };
+
+    switch (activeChain.chainType) {
+      case 'DIPLOMATIC':
+        return {
+          ...baseChoice,
+          text: "Focus on diplomatic relations",
+          impact: JSON.stringify({ 
+            economy: -5, 
+            happiness: 5, 
+            military: -5 
+          })
+        };
+      case 'CRISIS':
+        return {
+          ...baseChoice,
+          text: "Address the ongoing crisis",
+          impact: JSON.stringify({ 
+            economy: -10, 
+            happiness: -5, 
+            military: -5 
+          })
+        };
+      default:
+        return {
+          ...baseChoice,
+          text: "Consider the bigger picture",
+          impact: JSON.stringify({ 
+            economy: -5, 
+            happiness: 0, 
+            military: 0 
+          })
+        };
+    }
+  }
+
+  _addChainContext(description, activeChain) {
+    // Add context about the active chain to the event description
+    return `${description}\n\nMeanwhile, the situation with ${activeChain.trigger} continues to develop.`;
+  }
+  
   _getEmergencyFallbackEvent(kingdomState) {
     // This is a last-resort fallback that returns an event object directly
     // without database interaction

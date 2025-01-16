@@ -4,45 +4,43 @@ import { a, defineData } from '@aws-amplify/backend';
 const schema = a.schema({
   Kingdom: a
     .model({
+      id: a.string().required(),
       name: a.string().required(),
       population: a.integer().required(),
       economy: a.integer().required(),
       military: a.integer().required(),
       happiness: a.integer().required(),
-      description: a.string(),
+      description: a.string().required(),
+      difficulty: a.string().required(),
       turn: a.integer().required(),
       lastUpdated: a.string().required(),
       owner: a.string().required(),
+      // Optional fields
       previousPopulation: a.integer(),
       previousEconomy: a.integer(),
       previousMilitary: a.integer(),
-      previousHappiness: a.integer(),
-      difficulty: a.string()
+      previousHappiness: a.integer()
     })
     .authorization(allow => allow.owner().to(['create', 'read', 'update', 'delete'])),
 
   Resource: a
   .model({
-    id: a.id(),  // Changed to use id() helper
+    id: a.string().required(),
     name: a.string().required(),
     type: a.string().required(),
-    category: a.string(),  // Made optional
-    quantity: a.integer().default(0),  // Added default
-    production: a.integer().default(0),  // Added default
-    consumption: a.integer().default(0),  // Added default
-    baseProduction: a.integer(),  // Made optional
-    baseConsumption: a.integer(),  // Made optional
-    minQuantity: a.integer().default(0),  // Added default
-    maxStorage: a.integer().default(1000),  // Added default
-    status: a.string().default('NORMAL'),  // Added default
-    qualityLevel: a.integer().default(1),  // Added default
-    efficiency: a.integer(),  // Made optional
-    dependencies: a.string(),  // Optional JSON string
-    statusEffects: a.string(),  // Optional JSON string
-    trends: a.string(),  // Optional JSON string
-    lastUpdated: a.string().required(),
+    category: a.string().required(),
+    quantity: a.integer().required(),
+    production: a.integer().required(),
+    consumption: a.integer().required(),
+    baseProduction: a.integer().required(),
+    baseConsumption: a.integer().required(),
+    minQuantity: a.integer().required(),
+    maxStorage: a.integer().required(),
+    status: a.string().required(),
+    qualityLevel: a.integer().required(),
     kingdomId: a.string().required(),
-    owner: a.string().required()
+    owner: a.string().required(),
+    lastUpdated: a.string().required()
   })
     .authorization(allow => allow.owner().to(['create', 'read', 'update', 'delete'])),
 
@@ -52,12 +50,32 @@ const schema = a.schema({
       title: a.string().required(),
       description: a.string().required(),
       type: a.string().required(),
-      impact: a.string().required(),
-      choices: a.string().required(),
+      impact: a.string().required(),  // JSON string
+      choices: a.string().required(), // JSON string
       timestamp: a.string().required(),
       kingdomId: a.string().required(),
       owner: a.string().required(),
-      relatedResources: a.string(), // New field - JSON string of related resource IDs
+      // Optional fields
+      chainId: a.string(),
+      relatedResources: a.string() // JSON string
+    })
+    .authorization(allow => allow.owner().to(['create', 'read', 'update', 'delete'])),
+
+  EventChain: a
+    .model({
+      id: a.string().required(),
+      trigger: a.string().required(),
+      currentStep: a.integer().required(),
+      outcomes: a.string().required(), // JSON string
+      isComplete: a.boolean().required(),
+      startTime: a.string().required(),
+      kingdomId: a.string().required(),
+      owner: a.string().required(),
+      // Optional fields
+      endTime: a.string(),
+      archiveDate: a.string(),
+      chainType: a.string(),
+      impact: a.string() // JSON string
     })
     .authorization(allow => allow.owner().to(['create', 'read', 'update', 'delete'])),
 
@@ -76,6 +94,6 @@ const schema = a.schema({
 export const data = defineData({
   schema,
   authorizationModes: {
-    defaultAuthorizationMode: 'userPool',
-  },
+    defaultAuthorizationMode: 'userPool'
+  }
 });

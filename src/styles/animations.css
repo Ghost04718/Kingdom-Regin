@@ -1,0 +1,204 @@
+/* src/styles/animations.css */
+:root {
+    --animation-speed-slow: 0.5s;
+    --animation-speed-normal: 0.3s;
+    --animation-speed-fast: 0.2s;
+  }
+  
+  /* Basic Animations */
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  
+  @keyframes fadeOut {
+    from { opacity: 1; }
+    to { opacity: 0; }
+  }
+  
+  @keyframes slideUp {
+    from {
+      transform: translateY(20px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+  
+  @keyframes slideDown {
+    from {
+      transform: translateY(-20px);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+  
+  @keyframes slideIn {
+    from {
+      transform: translateX(-20px);
+      opacity: 0;
+    }
+    to {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+  
+  @keyframes slideOut {
+    from {
+      transform: translateX(0);
+      opacity: 1;
+    }
+    to {
+      transform: translateX(20px);
+      opacity: 0;
+    }
+  }
+  
+  @keyframes scaleIn {
+    from {
+      transform: scale(0.95);
+      opacity: 0;
+    }
+    to {
+      transform: scale(1);
+      opacity: 1;
+    }
+  }
+  
+  @keyframes scaleOut {
+    from {
+      transform: scale(1);
+      opacity: 1;
+    }
+    to {
+      transform: scale(0.95);
+      opacity: 0;
+    }
+  }
+  
+  @keyframes pulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+    100% { transform: scale(1); }
+  }
+  
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    10%, 30%, 50%, 70%, 90% { transform: translateX(-2px); }
+    20%, 40%, 60%, 80% { transform: translateX(2px); }
+  }
+  
+  /* Animation Classes */
+  .animate-fadeIn {
+    animation: fadeIn var(--animation-speed-normal) ease forwards;
+  }
+  
+  .animate-fadeOut {
+    animation: fadeOut var(--animation-speed-normal) ease forwards;
+  }
+  
+  .animate-slideUp {
+    animation: slideUp var(--animation-speed-normal) ease forwards;
+  }
+  
+  .animate-slideDown {
+    animation: slideDown var(--animation-speed-normal) ease forwards;
+  }
+  
+  .animate-slideIn {
+    animation: slideIn var(--animation-speed-normal) ease forwards;
+  }
+  
+  .animate-slideOut {
+    animation: slideOut var(--animation-speed-normal) ease forwards;
+  }
+  
+  .animate-scaleIn {
+    animation: scaleIn var(--animation-speed-normal) ease forwards;
+  }
+  
+  .animate-scaleOut {
+    animation: scaleOut var(--animation-speed-normal) ease forwards;
+  }
+  
+  .animate-pulse {
+    animation: pulse 2s ease infinite;
+  }
+  
+  .animate-shake {
+    animation: shake 0.5s ease;
+  }
+  
+  /* Transitions */
+  .transition-all {
+    transition: all var(--animation-speed-normal) ease;
+  }
+  
+  .transition-transform {
+    transition: transform var(--animation-speed-normal) ease;
+  }
+  
+  .transition-opacity {
+    transition: opacity var(--animation-speed-normal) ease;
+  }
+  
+  /* Hover Effects */
+  .hover-scale {
+    transition: transform var(--animation-speed-fast) ease;
+  }
+  
+  .hover-scale:hover {
+    transform: scale(1.05);
+  }
+  
+  .hover-lift {
+    transition: transform var(--animation-speed-fast) ease;
+  }
+  
+  .hover-lift:hover {
+    transform: translateY(-2px);
+  }
+  
+  /* State Classes */
+  .is-loading {
+    animation: pulse 1.5s ease infinite;
+  }
+  
+  .is-error {
+    animation: shake 0.5s ease;
+  }
+  
+  .is-success {
+    animation: scaleIn var(--animation-speed-normal) ease;
+  }
+  
+  /* Utility Classes */
+  .delay-100 {
+    animation-delay: 100ms;
+  }
+  
+  .delay-200 {
+    animation-delay: 200ms;
+  }
+  
+  .delay-300 {
+    animation-delay: 300ms;
+  }
+  
+  .duration-fast {
+    animation-duration: var(--animation-speed-fast);
+  }
+  
+  .duration-normal {
+    animation-duration: var(--animation-speed-normal);
+  }
+  
+  .duration-slow {
+    animation-duration: var(--animation-speed-slow);
+  }

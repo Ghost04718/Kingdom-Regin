@@ -1,25 +1,67 @@
 /* src/App.css */
-:root {
-  --kingdom-primary: #2c3e50;
-  --kingdom-secondary: #34495e;
-  --kingdom-accent: #e74c3c;
+.app-container {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 2rem;
 }
 
-.kingdom-card {
-  background-color: var(--kingdom-primary);
-  border-radius: 8px;
-  padding: 1rem;
-  margin: 1rem 0;
-  color: white;
+.loading-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
 }
 
-.kingdom-stats {
+.game-stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 1rem;
 }
 
 .event-card {
-  background-color: var(--kingdom-secondary);
-  border-left: 4px solid var(--kingdom-accent);
+  border-left: 4px solid var(--amplify-colors-brand-primary-60);
+  margin: 1rem 0;
+}
+
+.resource-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1rem;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.loading-spinner {
+  border: 3px solid var(--amplify-colors-background-secondary);
+  border-top: 3px solid var(--amplify-colors-brand-primary-60);
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  animation: spin 1s linear infinite;
 }
